@@ -57,7 +57,7 @@ extern {
 }
 
 pub Expr: BoxExpr<'input> = { // exprA
-    <ExprB> ":" <Expr> => bx(Annot(<>)),
+    <ExprB> ":" <Expr> => bx(annot(<>)),
     ExprB,
 };
 
@@ -67,13 +67,11 @@ ExprB: BoxExpr<'input> = {
     If <Expr> Then <ExprB> Else <ExprC> => bx(BoolIf(<>)),
     <ExprC> "->" <ExprB> => bx(Pi("_", <>)),
     Let <Label> <(":" <Expr>)?> "=" <Expr> In <ExprB> => bx(Let(<>)),
-    "[" <a:Elems> "]" ":" <b:ListLike> <c:ExprE> => bx(b(c, a)),
-    ExprC,
+    ExprB2,
 };
 
-ListLike: ExprListFn<'input> = {
-    List => ListLit,
-    Optional => OptionalLit,
+ExprB2: BoxExpr<'input> = {
+    ExprC,
 };
 
 BoolOr: ExprOpFn<'input> = { "||" => BoolOr };
@@ -126,6 +124,7 @@ ExprF: BoxExpr<'input> = {
     Bool => bx(BoolLit(<>)),
     Record,
     RecordLit,
+    "[" <Elems> "]" => bx(ListLit(None, <>)),
     "(" <Expr> ")",
 };
 

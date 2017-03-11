@@ -156,8 +156,9 @@ pub enum Expr<'i, S, A> {
     TextLit(Builder),
     ///  `TextAppend x y                           ~  x ++ y`
     TextAppend(Box<Expr<'i, S, A>>, Box<Expr<'i, S, A>>),
-    ///  `ListLit t [x, y, z]                      ~  [x, y, z] : List t`
-    ListLit(Box<Expr<'i, S, A>>, Vec<Expr<'i, S, A>>),
+    ///  `ListLit (Just t ) [x, y, z]              ~  [x, y, z] : List t`
+    ///  `ListLit  Nothing  [x, y, z]              ~  [x, y, z]
+    ListLit(Option<Box<Expr<'i, S, A>>>, Vec<Expr<'i, S, A>>),
     ///  `OptionalLit t [e]                        ~  [e] : Optional t`
     ///  `OptionalLit t []                         ~  []  : Optional t`
     OptionalLit(Box<Expr<'i, S, A>>, Vec<Expr<'i, S, A>>),
@@ -342,7 +343,10 @@ impl<'i, S, A: Display> Expr<'i, S, A> {
                 write!(f, ") → ")?;
                 d.fmt_b(f)
             }
-            &ListLit(ref t, ref es) => {
+            &ListLit(None, ref es) => {
+                fmt_list("[", "]", es, f, |e, f| e.fmt(f))
+            }
+            &ListLit(Some(ref t), ref es) => {
                 fmt_list("[", "] : List ", es, f, |e, f| e.fmt(f))?;
                 t.fmt_e(f)
             }
@@ -671,8 +675,8 @@ pub fn shift<'i, S, T, A: Clone>(d: isize, v: V, e: &Expr<'i, S, A>) -> Expr<'i,
         DoubleLit(a) => DoubleLit(a),
         TextLit(ref a) => TextLit(a.clone()),
         TextAppend(ref a, ref b) => shift_op2(TextAppend, d, v, a, b),
-        ListLit(ref t, ref es) => {
-            ListLit(bx(shift(d, v, t)),
+        ListLit(ref ot, ref es) => {
+            ListLit(ot.as_ref().map(|t| bx(shift(d, v, t))),
                     es.iter().map(|e| shift(d, v, e)).collect())
         }
         OptionalLit(ref t, ref es) => {
@@ -768,10 +772,10 @@ pub fn subst<'i, S, T, A>(v: V<'i>, e: &Expr<'i, S, A>, b: &Expr<'i, T, A>) -> E
         DoubleLit(a) => DoubleLit(a),
         TextLit(ref a) => TextLit(a.clone()),
         TextAppend(ref a, ref b) => subst_op2(TextAppend, v, e, a, b),
-        ListLit(ref a, ref b) => {
-            let a2 = subst(v, e, a);
+        ListLit(ref oa, ref b) => {
+            let a2 = oa.as_ref().map(|a| bx(subst(v, e, a)));
             let b2 = b.iter().map(|be| subst(v, e, be)).collect();
-            ListLit(bx(a2), b2)
+            ListLit(a2, b2)
         }
         OptionalLit(ref a, ref b) => {
             let a2 = subst(v, e, a);
@@ -910,7 +914,7 @@ pub fn normalize<'i, S, T, A>(e: &Expr<'i, S, A>) -> Expr<'i, T, A>
                         if check(&labeled) {
                             let mut v = vec![];
                             list_to_vector(&mut v, labeled);
-                            ListLit(bx(t), v)
+                            ListLit(Some(bx(t)), v)
                         } else {
                             app(App(f, bx(t)), k)
                         }
@@ -921,7 +925,7 @@ pub fn normalize<'i, S, T, A>(e: &Expr<'i, S, A>) -> Expr<'i, T, A>
                     );
                     normalize(&e2)
                 }
-                (App(f, x_), ListLit(t, ys)) => match *f {
+                (App(f, t), ListLit(_, ys)) => match *f {
                     BuiltinValue(ListLength) =>
                         NaturalLit(ys.len()),
                     BuiltinValue(ListHead) =>
@@ -931,9 +935,9 @@ pub fn normalize<'i, S, T, A>(e: &Expr<'i, S, A>) -> Expr<'i, T, A>
                     BuiltinValue(ListReverse) => {
                         let mut xs = ys;
                         xs.reverse();
-                        normalize(&ListLit(t, xs))
+                        normalize(&ListLit(Some(t), xs))
                     }
-                    _ => app(App(f, x_), ListLit(t, ys)),
+                    _ => app(App(f, t.clone()), ListLit(Some(t), ys)),
                 },
                 /*
                 App (App ListIndexed _) (ListLit t xs) ->
@@ -1012,10 +1016,10 @@ pub fn normalize<'i, S, T, A>(e: &Expr<'i, S, A>) -> Expr<'i, T, A>
                        |xt, yt| TextLit(xt + &yt),
                        normalize(x), normalize(y))
         }
-        ListLit(ref t, ref es) => {
-            let t2  = normalize(t);
+        ListLit(ref ot, ref es) => {
+            let t2  = ot.as_ref().map(|t| bx(normalize(t)));
             let es2 = es.iter().map(normalize).collect();
-            ListLit(bx(t2), es2)
+            ListLit(t2, es2)
         }
         OptionalLit(ref t, ref es) => {
             let t2  = normalize(t);

@@ -32,4 +32,6 @@ fn test_parse() {
     println!("{:?}", parse_expr("foo.bar"));
     assert!(parse_expr("foo.bar").is_ok());
     assert!(parse_expr("[] : List Bool").is_ok());
+    assert!(parse_expr("\\(b : Bool) -> [b]").is_ok());
+    assert!(parse_expr("\\(b : Bool) -> [b] : List Bool").is_ok());
 }

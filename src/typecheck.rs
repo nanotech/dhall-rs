@@ -320,7 +320,19 @@ pub fn type_with<'i, S>(ctx: &Context<'i, Expr<'i, S, X>>,
         DoubleLit(_) => Ok(BuiltinType(Double)),
         TextLit(_) => Ok(BuiltinType(Text)),
         TextAppend(ref l, ref r) => op2_type(ctx, e, Text, CantTextAppend, l, r),
-        ListLit(ref t, ref xs) => {
+        ListLit(None, ref xs) => {
+            if xs.is_empty() {
+                return Err(TypeError::new(ctx, e, MissingListType));
+            }
+            let t = type_with(ctx, &xs[0])?;
+            let s = normalize::<_, S, _>(&type_with(ctx, &t)?); // ? annot
+            match s {
+                Const(Type) => {}
+                _ => return Err(TypeError::new(ctx, e, InvalidListType(t))),
+            }
+            Ok(App(bx(BuiltinType(List)), bx(t)))
+        }
+        ListLit(Some(ref t), ref xs) => {
             let s = normalize::<_, S, _>(&type_with(ctx, t)?);
             match s {
                 Const(Type) => {}
@@ -331,7 +343,7 @@ pub fn type_with<'i, S>(ctx: &Context<'i, Expr<'i, S, X>>,
                 if !prop_equal(t, &t2) {
                     let nf_t  = normalize(t);
                     let nf_t2 = normalize(&t2);
-                    return Err(TypeError::new(ctx, e, InvalidListElement(i, nf_t, x.clone(), nf_t2)) )
+                    return Err(TypeError::new(ctx, e, InvalidListElement(i, nf_t, x.clone(), nf_t2)))
                 }
             }
             Ok(App(bx(BuiltinType(List)), t.clone()))
@@ -528,6 +540,8 @@ pub enum TypeMessage<'i, S> {
     TypeMismatch(Expr<'i, S, X>, Expr<'i, S, X>, Expr<'i, S, X>, Expr<'i, S, X>),
     AnnotMismatch(Expr<'i, S, X>, Expr<'i, S, X>, Expr<'i, S, X>),
     Untyped,
+    MissingListType,
+    MismatchedListElements(usize, Expr<'i, S, X>, Expr<'i, S, X>, Expr<'i, S, X>),
     InvalidListElement(usize, Expr<'i, S, X>, Expr<'i, S, X>, Expr<'i, S, X>),
     InvalidListType(Expr<'i, S, X>),
     InvalidOptionalElement(Expr<'i, S, X>, Expr<'i, S, X>, Expr<'i, S, X>),
