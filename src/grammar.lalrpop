@@ -57,17 +57,17 @@ extern {
 }
 
 pub Expr: BoxExpr<'input> = { // exprA
-    <ExprB> ":" <Expr> => bx(annot(<>)),
+    Lambda "(" <Label> ":" <Expr> ")" "->" <Expr> => bx(Lam(<>)),
+    If <Expr> Then <Expr> Else <Expr> => bx(BoolIf(<>)),
+    Pi "(" <Label> ":" <Expr> ")" "->" <Expr> => bx(Pi(<>)),
+    Let <Label> <(":" <Expr>)?> "=" <Expr> In <Expr> => bx(Let(<>)),
+    <ExprC> "->" <Expr> => bx(Pi("_", <>)),
     ExprB,
 };
 
 ExprB: BoxExpr<'input> = {
-    Lambda "(" <Label> ":" <Expr> ")" "->" <ExprB> => bx(Lam(<>)),
-    Pi "(" <Label> ":" <Expr> ")" "->" <ExprB> => bx(Pi(<>)),
-    If <Expr> Then <ExprB> Else <ExprC> => bx(BoolIf(<>)),
-    <ExprC> "->" <ExprB> => bx(Pi("_", <>)),
-    Let <Label> <(":" <Expr>)?> "=" <Expr> In <ExprB> => bx(Let(<>)),
-    ExprB2,
+    <ExprC> ":" <Expr> => bx(annot(<>)),
+    ExprC,
 };
 
 ExprB2: BoxExpr<'input> = {
