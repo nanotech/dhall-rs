@@ -5,8 +5,11 @@ use core::BuiltinType::*;
 use core::BuiltinValue;
 use core::BuiltinValue::*;
 use core::Const;
+use nom::bytes::complete::{tag, take_while, take_while1};
+use nom::error::ErrorKind;
+use nom::Err::Error;
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Keyword {
     Let,
     In,
@@ -15,19 +18,19 @@ pub enum Keyword {
     Else,
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ListLike {
     List,
     Optional,
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Builtin {
     Type(BuiltinType),
     Value(BuiltinValue),
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Tok<'i> {
     Identifier(&'i str),
     Keyword(Keyword),
@@ -65,7 +68,7 @@ pub enum Tok<'i> {
 
 #[derive(Debug)]
 pub enum LexicalError {
-    Error(usize, nom::simple_errors::Err<u32>),
+    Error(usize, ErrorKind),
     Incomplete(nom::Needed),
 }
 
@@ -82,40 +85,39 @@ fn is_identifier_rest_char(c: char) -> bool {
 
 macro_rules! digits {
     ($i:expr, $t:tt, $radix:expr) => {{
-        let r: nom::IResult<&str, $t> = map_res!(
-            $i,
-            take_while1_s!(call!(|c: char| c.is_digit($radix))),
-            |s| $t::from_str_radix(s, $radix)
-        );
+        let r: nom::IResult<&str, $t> =
+            map_res!($i, take_while1(|c: char| c.is_digit($radix)), |s| {
+                $t::from_str_radix(s, $radix)
+            });
         r
     }};
 }
 
-named!(natural<&str, usize>, preceded!(tag!("+"), digits!(usize, 10)));
+named!(natural<&str, usize>, preceded!(tag("+"), digits!(usize, 10)));
 named!(integral<&str, isize>, digits!(isize, 10));
 named!(integer<&str, isize>, alt!(
-    preceded!(tag!("-"), map!(integral, |i: isize| -i)) |
+    preceded!(tag("-"), map!(integral, |i: isize| -i)) |
     integral
 ));
 named!(boolean<&str, bool>, alt!(
-    value!(true, tag!("True")) |
-    value!(false, tag!("False"))
+    value!(true, tag("True")) |
+    value!(false, tag("False"))
 ));
 
 named!(identifier<&str, &str>, recognize!(preceded!(
-    take_while1_s!(is_identifier_first_char),
-    take_while_s!(is_identifier_rest_char))
+    take_while1(is_identifier_first_char),
+    take_while(is_identifier_rest_char))
 ));
 
 /// Parse an identifier, ensuring a whole identifier is parsed and not just a prefix.
 macro_rules! ident_tag {
     ($i:expr, $tag:expr) => {
         match identifier($i) {
-            nom::IResult::Done(i, s) => {
+            Ok((i, s)) => {
                 if s == $tag {
-                    nom::IResult::Done(i, s)
+                    Ok((i, s))
                 } else {
-                    nom::IResult::Error(error_position!(nom::ErrorKind::Tag, $i))
+                    Err(Error(error_position!($i, ErrorKind::Tag)))
                 }
             }
             r => r,
@@ -142,26 +144,27 @@ fn string_escape_single(c: char) -> Option<&'static str> {
 }
 
 named!(string_escape_numeric<&str, char>, map_opt!(alt!(
-    preceded!(tag!("x"), digits!(u32, 16)) |
-    preceded!(tag!("o"), digits!(u32, 8)) |
+    preceded!(tag("x"), digits!(u32, 16)) |
+    preceded!(tag("o"), digits!(u32, 8)) |
     digits!(u32, 10)
 ), ::std::char::from_u32));
 
 fn string_lit_inner(input: &str) -> nom::IResult<&str, String> {
-    use nom::ErrorKind;
-    use nom::IResult::*;
     let mut s = String::new();
     let mut cs = input.char_indices().peekable();
     while let Some((i, c)) = cs.next() {
         match c {
-            '"' => return nom::IResult::Done(&input[i..], s),
+            '"' => return Ok((&input[i..], s)),
             '\\' => match cs.next() {
                 Some((_, s)) if s.is_whitespace() => {
                     while cs.peek().map(|&(_, s)| s.is_whitespace()) == Some(true) {
                         let _ = cs.next();
                     }
                     if cs.next().map(|p| p.1) != Some('\\') {
-                        return Error(error_position!(ErrorKind::Custom(4 /* FIXME */), input));
+                        return Err(Error(error_position!(
+                            input,
+                            ErrorKind::Escaped /* FIXME */
+                        )));
                     }
                 }
                 Some((j, ec)) => {
@@ -169,8 +172,8 @@ fn string_lit_inner(input: &str) -> nom::IResult<&str, String> {
                         s.push_str(esc);
                     // FIXME Named ASCII escapes and control character escapes
                     } else {
-                        match string_escape_numeric(&input[j..]) {
-                            Done(rest, esc) => {
+                        string_escape_numeric(&input[j..])
+                            .map(|(rest, esc)| {
                                 let &(k, _) = cs.peek().unwrap();
                                 // digits are always single byte ASCII characters
                                 let consumed = input[k..].len() - rest.len();
@@ -178,21 +181,27 @@ fn string_lit_inner(input: &str) -> nom::IResult<&str, String> {
                                     let _ = cs.next();
                                 }
                                 s.push(esc);
-                            }
-                            Incomplete(s) => return Incomplete(s),
-                            Error(e) => return Error(e),
-                        }
+                            })
+                            .unwrap();
                     }
                 }
-                _ => return Error(error_position!(ErrorKind::Custom(5 /* FIXME */), input)),
+                _ => {
+                    return Err(Error(error_position!(
+                        input,
+                        ErrorKind::Escaped /* FIXME */
+                    )));
+                }
             },
             _ => s.push(c),
         }
     }
-    Error(error_position!(ErrorKind::Custom(3 /* FIXME */), input))
+    Err(Error(error_position!(
+        input,
+        ErrorKind::Escaped /* FIXME */
+    )))
 }
 
-named!(string_lit<&str, String>, delimited!(tag!("\""), string_lit_inner, tag!("\"")));
+named!(string_lit<&str, String>, delimited!(tag("\""), string_lit_inner, tag("\"")));
 
 named!(keyword<&str, Keyword>, alt!(
     value!(Keyword::Let, ident_tag!("let")) |
@@ -235,13 +244,13 @@ named!(builtin<&str, Builtin>, alt!(
 
 named!(token<&str, Tok>, alt!(
     value!(Tok::Pi, ident_tag!("forall")) |
-    value!(Tok::Pi, tag!("∀")) |
-    value!(Tok::Lambda, tag!("\\")) |
-    value!(Tok::Lambda, tag!("λ")) |
-    value!(Tok::Combine, tag!("/\\")) |
-    value!(Tok::Combine, tag!("∧")) |
-    value!(Tok::Arrow, tag!("->")) |
-    value!(Tok::Arrow, tag!("→")) |
+    value!(Tok::Pi, tag("∀")) |
+    value!(Tok::Lambda, tag("\\")) |
+    value!(Tok::Lambda, tag("λ")) |
+    value!(Tok::Combine, tag("/\\")) |
+    value!(Tok::Combine, tag("∧")) |
+    value!(Tok::Arrow, tag("->")) |
+    value!(Tok::Arrow, tag("→")) |
 
     map!(type_const, Tok::Const) |
     map!(boolean, Tok::Bool) |
@@ -253,23 +262,23 @@ named!(token<&str, Tok>, alt!(
     map!(identifier, Tok::Identifier) |
     map!(string_lit, Tok::Text) |
 
-    value!(Tok::BraceL, tag!("{")) |
-    value!(Tok::BraceR, tag!("}")) |
-    value!(Tok::BracketL, tag!("[")) |
-    value!(Tok::BracketR, tag!("]")) |
-    value!(Tok::ParenL, tag!("(")) |
-    value!(Tok::ParenR, tag!(")")) |
-    value!(Tok::BoolAnd, tag!("&&")) |
-    value!(Tok::BoolOr, tag!("||")) |
-    value!(Tok::CompareEQ, tag!("==")) |
-    value!(Tok::CompareNE, tag!("!=")) |
-    value!(Tok::Append, tag!("++")) |
-    value!(Tok::Times, tag!("*")) |
-    value!(Tok::Plus, tag!("+")) |
-    value!(Tok::Comma, tag!(",")) |
-    value!(Tok::Dot, tag!(".")) |
-    value!(Tok::Ascription, tag!(":")) |
-    value!(Tok::Equals, tag!("="))
+    value!(Tok::BraceL, tag("{")) |
+    value!(Tok::BraceR, tag("}")) |
+    value!(Tok::BracketL, tag("[")) |
+    value!(Tok::BracketR, tag("]")) |
+    value!(Tok::ParenL, tag("(")) |
+    value!(Tok::ParenR, tag(")")) |
+    value!(Tok::BoolAnd, tag("&&")) |
+    value!(Tok::BoolOr, tag("||")) |
+    value!(Tok::CompareEQ, tag("==")) |
+    value!(Tok::CompareNE, tag("!=")) |
+    value!(Tok::Append, tag("++")) |
+    value!(Tok::Times, tag("*")) |
+    value!(Tok::Plus, tag("+")) |
+    value!(Tok::Comma, tag(",")) |
+    value!(Tok::Dot, tag(".")) |
+    value!(Tok::Ascription, tag(":")) |
+    value!(Tok::Equals, tag("="))
 ));
 
 fn find_end(input: &str, ending: &str) -> Option<usize> {
@@ -283,6 +292,8 @@ pub struct Lexer<'input> {
 
 impl<'input> Lexer<'input> {
     pub fn new(input: &'input str) -> Self {
+        // FIXME quick hack to accommodate Nom 4 / 5 changes.
+        //let padded = format!("{} ", input);
         Lexer {
             input: input,
             offset: 0,
@@ -295,7 +306,7 @@ impl<'input> Lexer<'input> {
 
     fn skip_whitespace(&mut self) -> bool {
         let input = self.current_input();
-        let trimmed = input.trim_left();
+        let trimmed = input.trim_start();
         let whitespace_len = input.len() - trimmed.len();
         let skipped = whitespace_len > 0;
         if skipped {
@@ -330,26 +341,32 @@ impl<'input> Iterator for Lexer<'input> {
     type Item = Spanned<Tok<'input>, usize, LexicalError>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        use nom::IResult::*;
+        use nom::Err::Failure;
+        use nom::Err::Incomplete;
         self.skip_comments_and_whitespace();
         let input = self.current_input();
         if input.is_empty() {
             return None;
         }
         match token(input) {
-            Done(rest, t) => {
+            Ok((rest, t)) => {
                 let parsed_len = input.len() - rest.len();
-                //println!("parsed {} bytes => {:?}", parsed_len, t);
+                // println!("parsed {} bytes => {:?}", parsed_len, t);
                 let start = self.offset;
                 self.offset += parsed_len;
                 Some(Ok((start, t, self.offset)))
             }
-            Error(e) => {
+            Err(Incomplete(needed)) => Some(Err(LexicalError::Incomplete(needed))),
+            Err(Error(e)) => {
                 let offset = self.offset;
                 self.offset = self.input.len();
-                Some(Err(LexicalError::Error(offset, e)))
+                Some(Err(LexicalError::Error(offset, e.1)))
             }
-            Incomplete(needed) => Some(Err(LexicalError::Incomplete(needed))),
+            Err(Failure(e)) => {
+                let offset = self.offset;
+                self.offset = self.input.len();
+                Some(Err(LexicalError::Error(offset, e.1)))
+            }
         }
     }
 }
@@ -374,15 +391,15 @@ fn test_lex() {
     let tokens = lexer.map(|r| r.unwrap().1).collect::<Vec<_>>();
     assert_eq!(&tokens, &expected);
 
-    assert_eq!(string_lit(r#""a\&b""#).to_result(), Ok("ab".to_owned()));
+    assert_eq!(string_lit(r#""a\&b""#).map(|x| x.1), Ok("ab".to_owned()));
     assert_eq!(
-        string_lit(r#""a\     \b""#).to_result(),
+        string_lit(r#""a\     \b""#).map(|x| x.1),
         Ok("ab".to_owned())
     );
     assert!(string_lit(r#""a\     b""#).is_err());
-    assert_eq!(string_lit(r#""a\nb""#).to_result(), Ok("a\nb".to_owned()));
+    assert_eq!(string_lit(r#""a\nb""#).map(|x| x.1), Ok("a\nb".to_owned()));
     assert_eq!(
-        string_lit(r#""\o141\x62\99""#).to_result(),
+        string_lit(r#""\o141\x62\99""#).map(|x| x.1),
         Ok("abc".to_owned())
     );
 }
