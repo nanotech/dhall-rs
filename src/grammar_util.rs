@@ -8,7 +8,7 @@ pub type ExprListFn<'i> = fn(BoxExpr<'i>, Vec<ParsedExpr<'i>>) -> ParsedExpr<'i>
 
 pub fn builtin_expr<'i, S, A>(b: Builtin) -> Expr<'i, S, A> {
     match b {
-        Builtin::Type(t)  => Expr::BuiltinType(t),
+        Builtin::Type(t) => Expr::BuiltinType(t),
         Builtin::Value(v) => Expr::BuiltinValue(v),
     }
 }
