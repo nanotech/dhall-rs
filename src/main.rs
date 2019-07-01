@@ -81,7 +81,7 @@ fn main() {
             return;
         }
         Err(lalrpop_util::ParseError::UnrecognizedToken {
-            token: Some((start, t, end)),
+            token: (start, t, end),
             expected: e,
         }) => {
             print_error(&format!("Unrecognized token {:?}", t), &buffer, start, end);
